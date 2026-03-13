@@ -1,0 +1,29 @@
+# Raw simulation checkpoints (large, regenerable via nest_collect_data.py)
+data/
+
+# Binary pickle files (CSV versions are tracked instead)
+processed_data/*.pkl
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Exploratory/scratch scripts
+explore_processed.py
+inspect_data.py
+quick_test.py
+make_figures.py
+README_figures.md

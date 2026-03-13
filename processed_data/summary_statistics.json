@@ -1,0 +1,74 @@
+{
+  "data_collection": {
+    "total_simulations": 2160,
+    "unique_configs": 672,
+    "success_rate": 93.33333333333333,
+    "trials_per_config": 3.0
+  },
+  "parameter_ranges": {
+    "n_neurons": [
+      10,
+      50,
+      100,
+      200,
+      500,
+      1000,
+      2000,
+      4000,
+      8000,
+      16000
+    ],
+    "n_cores": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "conn_prob": [
+      0.05,
+      0.1,
+      0.2
+    ],
+    "firing_rate": [
+      10.0,
+      20.0,
+      40.0
+    ],
+    "learning_rules": [
+      "static",
+      "stdp"
+    ]
+  },
+  "timing_ranges": {
+    "T_simulate_min": 0.17244956633173084,
+    "T_simulate_max": 1950.8523456386756,
+    "T_simulate_mean": 64.93762213292823
+  },
+  "overhead_summary": {
+    "mean_overhead_pct": 50.49731641370016,
+    "max_overhead_pct": 182.8369468609805,
+    "min_overhead_pct": -5.251479606455519
+  },
+  "core_scaling_summary": {
+    "max_speedup": 12.119233016619527,
+    "max_speedup_config": {
+      "n_neurons": 8000,
+      "n_cores": 8,
+      "conn_prob": 0.2,
+      "firing_rate": 40.0,
+      "learning_rule": "static",
+      "T_simulate": 88.1707684826785,
+      "T_simulate_sem": 0.1950215526955178,
+      "T_1core": 1068.5620884959935,
+      "speedup": 12.119233016619527,
+      "speedup_sem": 0.041303582132553994,
+      "efficiency": 1.5149041270774408,
+      "efficiency_sem": 0.005162947766569249
+    },
+    "max_efficiency": 1.6062991756494385
+  },
+  "spike_divergence": {
+    "mean": -11.608552436555808,
+    "std": 17.49339696222955
+  }
+}
