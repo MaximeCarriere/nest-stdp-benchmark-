@@ -522,7 +522,7 @@ def build_story():
         p('All simulation scripts, processed data (CSV), and '
           'figure-generation code are publicly available at:'),
         Paragraph(
-            '<b>https://github.com/MaximeCarriere/nest-stdp-benchmark</b>',
+            '<b>https://github.com/MaximeCarriere/nest-stdp-benchmark-</b>',
             ParagraphStyle('repo', parent=body_style,
                            alignment=1, textColor=colors.HexColor('#2E86AB'),
                            spaceAfter=4)),

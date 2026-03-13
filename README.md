@@ -105,7 +105,7 @@ If you use this code or data, please cite:
 Carriere, M. (2025). Quantifying the Computational Cost of Spike-Timing-Dependent
 Plasticity in the NEST Neural Simulator: A Benchmark Study Towards FPGA Acceleration.
 Brain Language Laboratory, Freie Universität Berlin.
-https://github.com/MaximeCarriere/nest-stdp-benchmark
+https://github.com/MaximeCarriere/nest-stdp-benchmark-
 ```
 
 ---
