@@ -44,19 +44,25 @@
 \begin{abstract}
 Spiking Neural Networks (SNNs) trained with Spike-Timing Dependent
 Plasticity (STDP) offer a biologically plausible model of learning.
-Their simulation, however, carries a heavy computational cost that
-grows super-linearly with network size.
-Using the NEST simulator across 2\,160 configurations
-(network size, connection density, firing rate, and core count),
-we show that STDP can more than \emph{double} total simulation time
-compared to static synapses---an overhead reaching 183\%
-for networks of 8\,000 neurons.
-Multi-core CPU parallelism scales both synaptic rules equally but
-cannot close the STDP overhead gap: STDP remains $\sim\!2\times$
-slower than static at all core counts.
-These findings motivate a hardware-accelerated solution.
-We present these benchmarks as a foundation for designing an
-FPGA-based STDP co-processor.
+Their simulation, however, is substantially more expensive than
+equivalent networks with fixed synapses.
+We present a \emph{simulator-level} benchmark: we measure total
+wall-clock runtime in NEST 3.6 when using its \texttt{stdp\_synapse}
+model versus its \texttt{static\_synapse} model, across 2\,160
+configurations (network size, connection density, firing rate, and
+core count).
+The results quantify the runtime overhead that NEST's STDP
+implementation adds over static synapses under identical network
+and input conditions---they do not isolate pure STDP arithmetic cost
+from other simulator internals such as event scheduling or memory
+management.
+We find that \texttt{stdp\_synapse} can more than double total
+simulation time, reaching 183\% overhead for networks of 8\,000
+neurons.
+Multi-core CPU parallelism reduces absolute runtime for both models
+equally but does not close the overhead gap.
+These results motivate a hardware-accelerated co-processor to
+offload STDP weight updates from the CPU.
 \end{abstract}
 
 % ============================================================
@@ -82,10 +88,15 @@ connections are updated during simulation.
 
 In this work we focus on the dominant biological learning rule:
 \textbf{Spike-Timing Dependent Plasticity} (STDP).
-We systematically benchmark its computational overhead using the
-widely used \emph{NEST} simulator \cite{gewaltig2007}
-and identify the scaling regimes where conventional CPUs become
-inadequate.
+We conduct a \emph{simulator-level} benchmark using the widely
+used NEST simulator \cite{gewaltig2007}: we compare total wall-clock
+simulation time when using NEST's \texttt{stdp\_synapse} model
+against its \texttt{static\_synapse} model across a large parameter
+sweep.
+The benchmark measures the full simulator runtime consequence of
+choosing one model over the other---including effects of NEST's
+event scheduler, memory allocator, and threading
+implementation---rather than isolating STDP arithmetic in isolation.
 Our ultimate goal is to offload STDP weight updates to an
 FPGA co-processor, enabling real-time simulation of large networks
 at a fraction of the energy cost.
@@ -152,7 +163,7 @@ Fig.~\ref{fig:stdp}.
   \label{fig:stdp}
 \end{figure}
 
-\subsection{Computational cost of STDP}
+\subsection{Expected simulation cost of \texttt{stdp\_synapse}}
 
 For a network of $N$ neurons with $S$ synapses, every spike triggers
 a weight update at each affected synapse.
@@ -174,8 +185,11 @@ as shown below.
 \label{sec:methods}
 
 We used \textbf{NEST 3.6} \cite{gewaltig2007} to simulate recurrent
-networks of \texttt{iaf\_psc\_alpha} integrate-and-fire neurons
-driven by Poisson external input.
+networks of \texttt{iaf\_psc\_alpha} leaky integrate-and-fire neurons
+($I_e\!=\!400$\,pA) driven by a \texttt{poisson\_generator} providing
+external excitatory input.
+Recurrent connections were drawn with rule \texttt{pairwise\_bernoulli}
+at connection probability $p$.
 Each configuration was simulated for 20\,s of biological time.
 The parameter space covered:
 
@@ -184,8 +198,10 @@ The parameter space covered:
   \item CPU cores: 1, 2, 4, 8
   \item Connection probability $p$: 5\%, 10\%, 20\%
   \item External firing rate: 10, 20, 40\,Hz
-  \item Learning rule: \emph{static synapses} vs. \emph{additive STDP}
-        ($\tau_{\pm}\!=\!20$\,ms, $\lambda\!=\!0.01$)
+  \item Synapse model: \texttt{static\_synapse} (weight$\,=\,0.5$,
+        delay$\,=\,0.1$\,ms) vs.\ \texttt{stdp\_synapse} (additive
+        rule, $\mu_{\pm}\!=\!0$; $\tau_+\!=\!20$\,ms, $\lambda\!=\!0.01$,
+        $\alpha\!=\!1.2$, $W_{\max}\!=\!1.0$, delay$\,=\,0.1$\,ms)
 \end{itemize}
 
 In total, 2\,160 simulations were run (3 trials each for statistical
@@ -193,15 +209,26 @@ error bars), collected over 2.9 days on a standard desktop workstation
 running Arch Linux.
 Timing was measured with \texttt{time.perf\_counter()},
 separating the network \emph{setup} phase from the
-\emph{simulation} phase.
-All data and scripts are available on request.
+\emph{simulation} phase; all reported times refer to the simulation
+phase only.
+
+\textbf{Note on trial independence.}
+Static and STDP conditions for the same nominal configuration
+were assigned independent random seeds, meaning the realised
+network topology (sampled from the same $p$) and Poisson spike
+trains differed across conditions.
+At the connection densities used, the expected number of synapses
+is $pN^{2}$ and its coefficient of variation is $1/\sqrt{pN^{2}}$,
+which is below 1\% for $N \ge 100$.
+Trial-to-trial variability is reported as standard error of the mean
+across three independent runs per condition.
 
 % ============================================================
 \section{Results}
 \label{sec:results}
 
-\subsection{STDP overhead is negligible below 1\,000 neurons,
-then becomes critical}
+\subsection{\texttt{stdp\_synapse} runtime overhead is negligible
+below 1\,000 neurons, then becomes critical}
 
 Fig.~\ref{fig:timing} compares simulation time for static and STDP
 networks as a function of network size, at 1 core, $p\!=\!0.1$,
@@ -253,31 +280,36 @@ seconds.
 Fig.~\ref{fig:overhead}B plots the STDP overhead \emph{per synapse}.
 Rather than staying constant (ideal dashed line), the cost per
 synapse increases with $N$, revealing super-linear behaviour.
-The bottleneck is not the update arithmetic itself, but
-memory-access patterns: as the synapse table outgrows the CPU cache,
-cache misses accumulate and per-update cost rises.
+The per-synapse cost does not stay constant as the network grows,
+suggesting that memory-access patterns become a limiting factor.
+One plausible explanation, consistent with the observed inflection
+around $N\!\approx\!800$, is that the synapse table at that point
+exceeds the processor's fast on-chip cache, leading to more costly
+memory accesses; however, we did not collect low-level profiling
+counters (e.g.\ cache-miss rates) to confirm this directly.
 
 \begin{figure}[h]
   \centering
   \includegraphics[width=\linewidth]{figures/paper_fig3_overhead_scaling.pdf}
   \caption{%
-    \textbf{STDP overhead scaling.}
-    \textbf{(A)} Percentage overhead vs.\ network size for three
-    connection probabilities (1 core, 20\,Hz).
+    \textbf{\texttt{stdp\_synapse} runtime overhead scaling.}
+    \textbf{(A)} Percentage overhead of \texttt{stdp\_synapse} relative
+    to \texttt{static\_synapse} vs.\ network size, for three connection
+    probabilities (1 core, 20\,Hz).
     Dashed lines mark 50\% and 100\% overhead thresholds.
-    \textbf{(B)} STDP overhead per synapse; the non-flat curve
-    reveals super-linear scaling due to memory-access pressure.
+    \textbf{(B)} \texttt{stdp\_synapse} overhead per synapse; the
+    non-flat curve reveals super-linear scaling consistent with growing
+    memory-access pressure above $N\!\approx\!800$ neurons.
   }
   \label{fig:overhead}
 \end{figure}
 
-\subsection{Multi-core parallelism does not close the STDP gap}
+\subsection{Multi-core parallelism does not close the \texttt{stdp\_synapse} runtime gap}
 
-A natural first response to the STDP overhead is to simply use more
-CPU cores: if STDP doubles the computation, perhaps running on two
-cores restores the original speed.
-Fig.~\ref{fig:multicore} tests this intuition directly.
-
+A natural first response to the \texttt{stdp\_synapse} runtime overhead
+is to use more CPU cores: if \texttt{stdp\_synapse} doubles the
+simulation time, running on two cores might restore it.
+Fig.~\ref{fig:multicore} tests this directly.
 \textbf{Speedup with more cores (Panel A).}
 For static synapses, parallelism is beneficial only for large
 networks.
@@ -292,44 +324,33 @@ substantial, reaching close to or above the ideal linear line.
 The practical ceiling for this hardware configuration sits around
 $10\times$ speedup with 8 cores.
 
-\textbf{The STDP overhead gap persists at every core count (Panel B).}
-Panel B shows the raw wall-clock simulation time for both static and
-STDP synapses at $N\!=\!4\,000$ neurons---the most informative way to
-compare the two learning rules under parallelism.
-Both curves decrease steeply as cores are added, confirming that
-parallelism is effective for both rule types.
-Going from 1 to 8 cores reduces static time from 76\,s to 7.8\,s
-($9.7\times$ faster) and STDP time from 177\,s to 16\,s
-($11.0\times$ faster).
+\textbf{The \texttt{stdp\_synapse} runtime gap persists at every core count (Panel B).}
+Panel B shows wall-clock simulation time for both synapse models at
+$N\!=\!4\,000$ neurons.
+Both curves decrease steeply as cores are added: going from 1 to 8
+cores reduces \texttt{static\_synapse} time from 76\,s to 7.8\,s
+($9.7\times$) and \texttt{stdp\_synapse} time from 177\,s to 16\,s
+($11.0\times$).
 
-Yet at every single core count, STDP remains approximately
-$2.1$--$2.3\times$ slower than static, as shown by the bracket at 8
-cores.
-The two curves run in parallel: they drop at the same rate, keeping
-the same proportional distance from each other.
-This is the key finding---\textbf{adding more CPU cores cannot
-eliminate the STDP overhead}.
-Each core still has to execute the same weight-update calculation for
-every synapse; parallelism simply divides this work among more
-processors, but does not make the calculation itself any cheaper.
+The two curves descend in parallel, keeping approximately the same
+proportional distance at every core count ($2.1$--$2.3\times$, as
+indicated by the bracket at 8 cores).
+More formally, if $T_{\text{stdp}}(N,k) \approx r \cdot
+T_{\text{static}}(N,k)$ for an overhead ratio $r$ approximately
+independent of core count $k$, then the speedup of each model
+relative to its own single-core baseline is identical---the factor
+$r$ cancels in $T(N,1)/T(N,k)$.
+Parallelism therefore reduces absolute runtime for both models by
+the same proportion, leaving both the overhead ratio and the absolute
+time gap unchanged.
 
-Think of it this way: if STDP requires ten steps where static
-requires four, then splitting across eight cores gives you eight
-workers each doing ten steps vs.\ four steps.
-Every worker is still $2.5\times$ slower on their share of the work.
-The ratio never changes.
-
-This finding has an important practical implication.
-Scaling from 1 to 8 cores on a typical server is already a
-significant hardware investment.
-Yet even with this investment, a biologically realistic network with
-STDP synapses will always simulate $2\times$ slower than the same
-network with fixed weights.
-For real-time or near-real-time brain-computer interface applications,
-this gap is unacceptable.
-A fundamentally different solution is needed---one that reduces the
-cost of the STDP computation itself rather than distributing it more
-efficiently.
+The implication is direct: adding CPU cores is insufficient to
+eliminate the \texttt{stdp\_synapse} runtime penalty.
+At 8 cores---already a significant hardware investment---the overhead
+remains $2.1\times$.
+An architectural solution that reduces the per-synapse update cost
+itself, rather than distributing it across more processors, is
+required.
 
 \begin{figure}[h]
   \centering
@@ -357,25 +378,36 @@ efficiently.
 \section{The Case for FPGA Acceleration}
 \label{sec:fpga}
 
-The results above identify a clear bottleneck:
+The results above identify a clear performance bottleneck:
 STDP weight updates incur a super-linearly growing cost that
-neither multi-core CPUs nor memory optimisation can fully address.
-The root cause is architectural: a general-purpose CPU must
+neither multi-core CPUs nor software-level optimisation can
+fully address.
+The per-synapse timing data (Fig.~\ref{fig:overhead}B) is
+consistent with a memory-hierarchy bottleneck on a general-purpose
+CPU, where each update requires the processor to:
 
 \begin{enumerate}\setlength\itemsep{0pt}
-  \item \textbf{Fetch} the synapse record from DRAM (cache-miss prone),
+  \item \textbf{Fetch} the synapse record (potentially from slow
+        main memory for large tables),
   \item \textbf{Compute} the exponential decay $e^{-\Delta t/\tau}$,
   \item \textbf{Write back} the updated weight—millions of times
         per second.
 \end{enumerate}
 
-FPGAs (Field-Programmable Gate Arrays) offer a compelling alternative
-because:
+Directly profiling cache-miss rates and memory-bandwidth utilisation
+would be needed to confirm this interpretation; we leave that as
+future work.
+Nevertheless, the empirical scaling behaviour motivates an
+architectural approach that avoids this bottleneck by design.
+
+FPGAs (Field-Programmable Gate Arrays) offer a compelling
+alternative because:
 \begin{itemize}\setlength\itemsep{0pt}
   \item \textbf{Massive parallelism}: an FPGA can process hundreds of
         synaptic updates simultaneously in dedicated hardware lanes.
   \item \textbf{On-chip BRAM}: synapse tables for moderate networks
-        fit in fast on-chip memory, eliminating DRAM latency.
+        can fit in fast on-chip block RAM, potentially avoiding the
+        memory-latency bottleneck hypothesised above.
   \item \textbf{Fixed-point exponentials}: the STDP kernel
         (Eq.~\ref{eq:stdp}) maps efficiently to lookup tables.
   \item \textbf{Energy efficiency}: FPGA implementations of neural
@@ -400,24 +432,30 @@ arithmetic-throughput requirements for that co-processor design.
 \section{Conclusion}
 \label{sec:conclusion}
 
-We have characterised, for the first time in a systematic study,
-the computational overhead of STDP in the NEST simulator across
-a wide range of network sizes, densities, and hardware
-configurations.
+We have systematically characterised the simulator-level runtime
+overhead of NEST's \texttt{stdp\_synapse} model relative to
+\texttt{static\_synapse}, across a wide range of network sizes,
+connection densities, and hardware configurations.
 Key findings:
 
 \begin{itemize}\setlength\itemsep{0pt}
-  \item \textbf{Below $\sim\!1\,000$ neurons}: overhead is negligible
-        ($<\!10\%$); standard CPUs are sufficient.
+  \item \textbf{Below $\sim\!1\,000$ neurons}: the runtime overhead
+        of \texttt{stdp\_synapse} is negligible ($<\!10\%$); standard
+        CPUs are sufficient.
   \item \textbf{Above $\sim\!1\,000$ neurons}: a sharp transition
-        occurs---STDP overhead exceeds 50\% at 500 neurons and peaks
+        occurs---the overhead exceeds 50\% by $N\!=\!500$ and peaks
         at \textbf{183\%} ($2.83\times$ as long) around 4\,000 neurons.
-  \item Absolute overhead at 8\,000 neurons is nearly 8 minutes
-        per simulation---prohibitive for parameter sweeps.
-  \item CPU multi-core parallelism provides limited relief due to
-        synchronisation and irregular memory access.
-  \item The root bottleneck is memory-bandwidth (cache misses),
-        not arithmetic---making FPGA on-chip BRAM an ideal target.
+  \item The absolute runtime penalty at 8\,000 neurons is nearly 8
+        minutes per simulation---prohibitive for parameter sweeps.
+  \item CPU multi-core parallelism reduces absolute runtime
+        substantially (up to $10\times$ at 8 cores for large $N$),
+        but does not reduce the \texttt{stdp\_synapse} overhead ratio,
+        which remains $2.1$--$2.3\times$ at all core counts.
+  \item The per-synapse cost scaling is consistent with a
+        memory-hierarchy effect (synapse table size relative to
+        on-chip cache), though direct profiling would be needed to
+        confirm this---making FPGA on-chip BRAM a well-motivated
+        target for future investigation.
 \end{itemize}
 
 These results establish a quantitative baseline for the design and

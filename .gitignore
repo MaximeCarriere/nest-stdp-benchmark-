@@ -10,6 +10,10 @@ __pycache__/
 *.pyo
 .ipynb_checkpoints/
 
+# PDF outputs and builder (kept local only)
+*.pdf
+make_paper_pdf.py
+
 # LaTeX build artifacts
 *.aux
 *.log
