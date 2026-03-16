@@ -118,33 +118,37 @@ The key insight from Hebbian theory is:
 \subsection{The STDP rule}
 
 STDP refines this idea by making the weight change depend on the
-\emph{relative timing} of the two spikes, as first demonstrated
-experimentally by Markram et al.\ \cite{markram1997} and
-subsequently characterised in hippocampal neurons by
+\emph{relative timing} of pre- and post-synaptic spikes, first
+demonstrated experimentally by Markram et al.\ \cite{markram1997}
+and subsequently characterised in hippocampal neurons by
 Bi and Poo \cite{bi1998}.
-Define $\Delta t = t_{\text{post}} - t_{\text{pre}}$,
-the interval between the post-synaptic and pre-synaptic spike.
-The weight update follows an exponential learning window
-(Fig.~\ref{fig:stdp}):
+
+In NEST's \texttt{stdp\_synapse}, the rule is implemented via
+pre- and post-synaptic eligibility traces.
+Each pre-synaptic spike increments a trace $x_{\rm pre}$ that
+decays with time constant $\tau_+$; each post-synaptic spike
+increments a trace $x_{\rm post}$ decaying with $\tau_-$.
+Synaptic weight $W$ is updated at every spike event:
 
 \begin{equation}
-  \Delta W =
-  \begin{cases}
-    A_+ \, e^{-\Delta t / \tau_+} & \text{if } \Delta t \geq 0 \quad \text{(LTP)}\\
-    -A_- \, e^{+\Delta t / \tau_-} & \text{if } \Delta t <  0 \quad \text{(LTD)}
-  \end{cases}
-  \label{eq:stdp}
+  \text{post fires:}\quad \Delta W = +A_+\, x_{\rm pre}(t)
+  \qquad\text{(LTP)}
+  \label{eq:stdp_ltp}
+\end{equation}
+\begin{equation}
+  \text{pre fires:}\quad \Delta W = -A_-\, x_{\rm post}(t)
+  \qquad\text{(LTD)}
+  \label{eq:stdp_ltd}
 \end{equation}
 
-\noindent where $A_{\pm}$ are the learning rates and $\tau_{\pm}$ are
-time constants (typically $\approx 20$\,ms).
-When the pre-synaptic neuron fires \emph{before} the post-synaptic
-one ($\Delta t > 0$), the synapse is \emph{strengthened}
-(Long-Term Potentiation, LTP).
-In the opposite case it is \emph{weakened}
-(Long-Term Depression, LTD).
-This biologically observed rule is illustrated in
-Fig.~\ref{fig:stdp}.
+\noindent For the additive rule ($\mu_{\pm}\!=\!0$), amplitudes are
+$A_+\!=\!\lambda$ and $A_-\!=\!\lambda\alpha$, independent of the
+current weight.
+Weights are hard-clipped to $[0,\,W_{\max}]$.
+The net effect is the classical exponential learning window
+(Fig.~\ref{fig:stdp}): potentiation when pre fires before post
+($\Delta t\!>\!0$, LTP), depression in the reverse order ($\Delta
+t\!<\!0$, LTD).
 
 \begin{figure}[h]
   \centering
@@ -165,63 +169,125 @@ Fig.~\ref{fig:stdp}.
 
 \subsection{Expected simulation cost of \texttt{stdp\_synapse}}
 
-For a network of $N$ neurons with $S$ synapses, every spike triggers
-a weight update at each affected synapse.
-The total number of operations per second scales as:
+When a pre-synaptic neuron fires, its spike is delivered to each of
+its $k_{\rm out}\!=\!pN$ post-synaptic targets, triggering a weight
+update at each synapse (Eqs.~\ref{eq:stdp_ltp}--\ref{eq:stdp_ltd}).
+Because every neuron fires at mean rate $\nu$, the total weight-update
+rate scales as:
 \[
-  \text{Updates/s} \;=\; \nu \cdot N \cdot \bar{k}
+  \text{Updates/s} \;=\; \nu \cdot p \cdot N^2
 \]
-where $\nu$ is the mean firing rate and $\bar{k}$ is the mean
-in-degree (number of incoming synapses per neuron).
-With $N\!=\!2\,000$, $\nu\!=\!20$\,Hz, and $p_{\rm conn}\!=\!0.1$,
-this yields $\approx\!8 \times 10^6$ updates per second---all of which
-must be serialised on a CPU, incurring memory-bandwidth pressure and
-branch-prediction penalties that grow super-linearly with $N$
-(as shown below),
+This is \emph{quadratic} in $N$: doubling the network size quadruples
+the update workload.
+With $N\!=\!2\,000$, $\nu\!=\!20$\,Hz, and $p\!=\!0.1$, this yields
+$\approx\!8 \times 10^6$ weight updates per second.
+Each update involves reading the current weight, evaluating the trace
+$x_{\rm pre}$ or $x_{\rm post}$, computing the new weight, and
+writing it back---operations that must all be serialised on a CPU and
+whose aggregate memory-access cost grows super-linearly with $N$,
 as shown below.
 
 % ============================================================
 \section{Experimental Setup}
 \label{sec:methods}
 
-We used \textbf{NEST 3.6} \cite{gewaltig2007} to simulate recurrent
-networks of \texttt{iaf\_psc\_alpha} leaky integrate-and-fire neurons
-($I_e\!=\!400$\,pA) driven by a \texttt{poisson\_generator} providing
-external excitatory input.
-Recurrent connections were drawn with rule \texttt{pairwise\_bernoulli}
-at connection probability $p$.
-Each configuration was simulated for 20\,s of biological time.
-The parameter space covered:
+\subsection{Model description}
 
-\begin{itemize}\setlength\itemsep{0pt}
-  \item Network size $N$: 10 to 16\,000 neurons (10 values)
-  \item CPU cores: 1, 2, 4, 8
-  \item Connection probability $p$: 5\%, 10\%, 20\%
-  \item External firing rate: 10, 20, 40\,Hz
-  \item Synapse model: \texttt{static\_synapse} (weight$\,=\,0.5$,
-        delay$\,=\,0.1$\,ms) vs.\ \texttt{stdp\_synapse} (additive
-        rule, $\mu_{\pm}\!=\!0$; $\tau_+\!=\!20$\,ms, $\lambda\!=\!0.01$,
-        $\alpha\!=\!1.2$, $W_{\max}\!=\!1.0$, delay$\,=\,0.1$\,ms)
+Following the structured description format of Nordlie et al.\
+\cite{nordlie2009}, Table~\ref{tab:model} summarises all model
+components.
+
+\begin{table}[h]
+\caption{Model summary (Nordlie et al.\ format).}
+\label{tab:model}
+\small
+\begin{tabular}{@{}ll@{}}
+\hline
+\textbf{Component} & \textbf{Description} \\
+\hline
+Populations    & $N$ neurons, single excitatory population \\
+Neuron model   & \texttt{iaf\_psc\_alpha} (LIF, alpha-function
+                 synaptic currents) \\
+Connectivity   & Pairwise Bernoulli, probability $p$; no autapses \\
+Synapse models & \texttt{static\_synapse} or \texttt{stdp\_synapse} \\
+External input & \texttt{poisson\_generator} $\to$ all neurons,
+                 rate $\nu$ \\
+Recordings     & Spike times; wall-clock simulation time \\
+Simulator      & NEST 3.6, resolution 0.1\,ms \\
+\hline
+\end{tabular}
+\end{table}
+
+\paragraph{Neuron model.}
+Each neuron follows leaky integrate-and-fire dynamics:
+\begin{equation}
+  \tau_m \frac{dV}{dt} = -(V - E_L) + R_m\bigl(I_e + I_{\rm syn}(t)\bigr)
+  \label{eq:lif}
+\end{equation}
+with threshold $V_{\rm th}$, reset $V_r$, and refractory period
+$\tau_{\rm ref}$.
+Synaptic currents $I_{\rm syn}$ have an alpha-function time course.
+A constant bias current $I_e\!=\!400$\,pA drives spontaneous firing.
+All other parameters take NEST 3.6 default values for
+\texttt{iaf\_psc\_alpha}.
+
+\paragraph{Connectivity.}
+Following Senk et al.\ \cite{senk2022}, connectivity is drawn by
+a \emph{pairwise Bernoulli} process: for each ordered pair of
+distinct neurons $(j,\,i)$ with $j \ne i$, a directed connection
+$j\!\to\!i$ is created independently with probability $p$.
+Autapses are excluded; at most one connection exists between any
+ordered pair (no multapses).
+The expected in-degree is $k_{\rm in}\!=\!pN$ with coefficient of
+variation $1/\sqrt{pN}$.
+
+\paragraph{Synapse models.}
+Two conditions are compared:
+\begin{itemize}\setlength\itemsep{2pt}
+  \item \texttt{static\_synapse}: weight $W\!=\!0.5$, delay
+        $d\!=\!0.1$\,ms; weights are fixed throughout simulation.
+  \item \texttt{stdp\_synapse}: additive pair-based STDP
+        ($\mu_{\pm}\!=\!0$); $\tau_+\!=\!\tau_-\!=\!20$\,ms,
+        $\lambda\!=\!0.01$, $\alpha\!=\!1.2$,
+        $W_{\max}\!=\!1.0$, initial $W\!=\!0.5$,
+        delay $d\!=\!0.1$\,ms.
+        Weights are updated at every pre- and post-synaptic spike
+        event according to Eqs.~\ref{eq:stdp_ltp}--\ref{eq:stdp_ltd}.
 \end{itemize}
 
-In total, 2\,160 simulations were run (3 trials each for statistical
-error bars), collected over 2.9 days on a standard desktop workstation
-running Arch Linux.
-Timing was measured with \texttt{time.perf\_counter()},
-separating the network \emph{setup} phase from the
-\emph{simulation} phase; all reported times refer to the simulation
-phase only.
+\subsection{Parameter sweep and timing protocol}
+
+The benchmark covers:
+\begin{itemize}\setlength\itemsep{0pt}
+  \item Network size $N\in\{10,\,50,\,100,\,200,\,500,\,1000,\,2000,
+        \,4000,\,8000,\,16000\}$
+  \item CPU cores: 1, 2, 4, 8
+  \item Connection probability $p\in\{0.05,\,0.10,\,0.20\}$
+  \item Poisson input rate $\nu\in\{10,\,20,\,40\}$\,Hz
+  \item Synapse model: \texttt{static\_synapse} vs.\
+        \texttt{stdp\_synapse}
+\end{itemize}
+
+Each configuration was simulated for 20\,s of biological time
+(resolution 0.1\,ms).
+Wall-clock time was recorded with \texttt{time.perf\_counter()}
+at \texttt{nest.Simulate()} entry and exit, isolating the simulation
+phase from the network-setup phase; all reported times refer to the
+simulation phase only.
+Each condition was repeated three times; results are reported as mean
+$\pm$ standard error of the mean (SEM).
+In total 2\,160 simulations were executed over 2.9\,days on a desktop
+workstation running Arch Linux (x86-64).
 
 \textbf{Note on trial independence.}
-Static and STDP conditions for the same nominal configuration
-were assigned independent random seeds, meaning the realised
-network topology (sampled from the same $p$) and Poisson spike
-trains differed across conditions.
-At the connection densities used, the expected number of synapses
-is $pN^{2}$ and its coefficient of variation is $1/\sqrt{pN^{2}}$,
-which is below 1\% for $N \ge 100$.
-Trial-to-trial variability is reported as standard error of the mean
-across three independent runs per condition.
+The \texttt{static\_synapse} and \texttt{stdp\_synapse} conditions
+for the same nominal configuration were assigned independent random
+seeds (NEST \texttt{rng\_seed}), so the realised network topology
+and Poisson spike trains differ between conditions.
+Because connectivity is drawn by a pairwise Bernoulli process with
+expected synapse count $pN^2$ and $\mathrm{CV}\!=\!1/\sqrt{pN^2}$,
+topology variability is below 1\% for $N\!\ge\!100$ and is
+negligible relative to the measured runtime differences.
 
 % ============================================================
 \section{Results}
@@ -509,6 +575,16 @@ G.-Q. Bi and M.-M. Poo,
 M.-O. Gewaltig and M. Diesmann,
 ``NEST (NEural Simulation Tool),''
 \textit{Scholarpedia}, vol.~2, no.~4, p.~1430, 2007.
+
+\bibitem{nordlie2009}
+E. Nordlie, M.-O. Gewaltig, and H.~E. Plesser,
+``Towards reproducible descriptions of neuronal network models,''
+\textit{PLOS Comput.\ Biol.}, vol.~5, no.~8, e1000456, 2009.
+
+\bibitem{senk2022}
+J. Senk \emph{et al.},
+``Connectivity concepts in neuronal network modeling,''
+\textit{PLOS Comput.\ Biol.}, vol.~18, no.~9, e1010086, 2022.
 
 \bibitem{cheung2012}
 K. Cheung, S. Schultz, and W. Luk,
